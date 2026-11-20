@@ -1,0 +1,20 @@
+[
+  "organize-pdf",
+  "crop-image",
+  "extract-text",
+  "sign-pdf",
+  "jpg-to-pdf",
+  "pdf-to-jpg",
+  "watermark",
+  "background-remover",
+  "home",
+  "merge-pdf",
+  "split-pdf",
+  "compress-pdf",
+  "compress-image",
+  "resize-image",
+  "convert-image",
+  "about",
+  "privacy",
+  "contact"
+]
