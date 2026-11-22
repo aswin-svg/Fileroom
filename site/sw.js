@@ -2,9 +2,9 @@
 
 const scope = self.registration.scope;
 const prefix = "fileroom:" + new URL(scope).pathname + ":";
-const cacheName = prefix + "cfd9df0cf99fdecf-8dcfe1a9";
+const cacheName = prefix + "ea0fffc3d7a942f1-ec07e7d8";
 const tail = value => new URL(value, scope).href;
-const core = ["organize-pdf/", "crop-image/", "extract-text/", "sign-pdf/", "jpg-to-pdf/", "pdf-to-jpg/", "watermark/", "background-remover/", "./", "merge-pdf/", "split-pdf/", "compress-pdf/", "compress-image/", "resize-image/", "convert-image/", "about/", "privacy/", "contact/", "assets/styles.css?v=a08af912ef12", "assets/app.js?v=0ace99ad5497", "assets/vendor/pdf-lib.min.js?v=0f9a5cad0794", "assets/vendor/jszip.min.js?v=acc7e41455a8", "assets/vendor/pdf.min.js?v=5b5799e6f8c6", "assets/vendor/pdf.worker.min.js", "assets/fonts/plus-jakarta-sans.woff2", "assets/fonts/jetbrains-mono.woff2", "assets/icon-192.png", "assets/icon-512.png", "manifest.webmanifest"].map(tail);
+const core = ["organize-pdf/", "crop-image/", "extract-text/", "sign-pdf/", "jpg-to-pdf/", "pdf-to-jpg/", "watermark/", "background-remover/", "./", "merge-pdf/", "split-pdf/", "compress-pdf/", "compress-image/", "resize-image/", "convert-image/", "about/", "privacy/", "contact/", "assets/styles.css?v=ec07e7d863af", "assets/app.js?v=ea0fffc3d7a9", "assets/vendor/pdf-lib.min.js?v=0f9a5cad0794", "assets/vendor/jszip.min.js?v=acc7e41455a8", "assets/vendor/pdf.min.js?v=5b5799e6f8c6", "assets/vendor/pdf.worker.min.js", "assets/fonts/plus-jakarta-sans.woff2", "assets/fonts/jetbrains-mono.woff2", "assets/icon-192.png", "assets/icon-512.png", "manifest.webmanifest"].map(tail);
 const optional = new Set(["assets/background/ort-wasm-simd-threaded.mjs", "assets/background/ort-wasm-simd-threaded.wasm", "assets/background/ort.wasm.min.js", "assets/background/u2netp.onnx", "assets/ocr/deu.traineddata.gz", "assets/ocr/eng.traineddata.gz", "assets/ocr/fra.traineddata.gz", "assets/ocr/por.traineddata.gz", "assets/ocr/spa.traineddata.gz", "assets/ocr/tesseract-core-lstm.wasm.js", "assets/ocr/tesseract-core-simd-lstm.wasm.js", "assets/ocr/tesseract.min.js", "assets/ocr/worker.min.js"].map(tail));
 const scopePath = new URL(scope).pathname;
 

@@ -129,9 +129,12 @@ function createUploader(cfg) {
   const textResult = h("div", { class: "text-result", hidden: "" }, extracted, copy);
 
   const alert = h("p", { class: "upload-alert", role: "alert", hidden: "" });
+  const cutoutImage = cfg.id === "background-remover" ? h("img", { alt: "Image with its background removed" }) : null;
+  const cutout = cutoutImage && h("figure", { class: "cutout-result", hidden: "" },
+    cutoutImage, h("figcaption", {}, "Checkerboard areas are transparent in the downloaded PNG."));
   const uploader = h("div", { class: "uploader" },
     input, zone, alert, list, optsEl, track, status,
-    h("div", { class: "actions" }, run, clear, summary, dl), textResult, workflow);
+    h("div", { class: "actions" }, run, clear, summary, dl), ...(cutout ? [cutout] : []), textResult, workflow);
 
   function warn(message = "") {
     alert.textContent = message;
@@ -157,6 +160,7 @@ function createUploader(cfg) {
     status.textContent = p > 0 && p < 100 ? "Working… " + p + "%" : status.textContent;
   };
 
+  let previewBlob;
   function render() {
     list.replaceChildren(...files.map((f, i) =>
       h("li", {}, h("span", { class: "name" }, f.name), h("span", { class: "size" }, result && result.sizes && result.sizes[i] != null ? fmt(f.size) + " → " + fmt(result.sizes[i]) : fmt(f.size)), ...(cfg.reorder ? [rowTools(i)] : []), ...(result?.targetNotes?.[i] ? [h("span", { class: "fine target-note" }, result.targetNotes[i])] : []))));
@@ -169,6 +173,19 @@ function createUploader(cfg) {
     summary.textContent = result && result.summary ? result.summary : "";
     dl.textContent = result && result.dlLabel ? result.dlLabel : "Download result";
     const parts = result?.parts || (result ? [{ blob: result.blob, name: result.filename }] : []);
+    if (cutout) {
+      const blob = parts[0]?.blob;
+      if (blob !== previewBlob) {
+        previewBlob = blob;
+        cutout.hidden = true;
+        cutoutImage.removeAttribute("src");
+        if (blob) {
+          previewImage(cutoutImage, blob).then(() => {
+            if (previewBlob === blob) cutout.hidden = false;
+          }).catch(() => {});
+        }
+      }
+    }
     transferable = parts.map(({ blob, name }) => new File([blob], name, { type: blob.type }));
     const destinations = TOOLS.filter(tool =>
       tool.id !== cfg.id && transferable.length > 0 && (tool.multiple || transferable.length === 1) &&
@@ -228,7 +245,9 @@ function createUploader(cfg) {
     }
     writeRoute("pushState", id);
     show();
-    focusRouteHeading();
+    const heading = destination.querySelector("h1");
+    heading.tabIndex = -1;
+    heading.focus();
   });
 
   optsEl.addEventListener("fileroom-edit", () => {
@@ -1093,14 +1112,13 @@ function getBackgroundSession() {
       }
       let bytes;
       if (hostedAssets) {
-        const response = await fetch(BG_MODEL, {
+        bytes = await fetch(BG_MODEL, {
           credentials: "omit", signal: AbortSignal.timeout(45000), integrity: "sha384-UpjzLoU+lZEVpKFraDciVxXXwOeulVBvJo0I/V2HCFa+3IfH/NVWG+LnDKlaZDM4"
-        }).catch(() => null);
-        if (!response?.ok) throw new Error("Could not load the background remover model. Try opening the app online first");
-        bytes = await response.arrayBuffer();
+        }).then(response => response.ok ? response.arrayBuffer() : null).catch(() => null);
       } else {
         bytes = vendorBytes("bgModel");
       }
+      if (!bytes?.byteLength) throw new Error("Could not load the background removal model. Check your connection and retry");
       ort.env.wasm.numThreads = 1;
       ort.env.wasm.wasmPaths = ORT_BASE;
       ort.env.wasm.initTimeout = 45000;
@@ -1118,11 +1136,19 @@ function getBackgroundSession() {
 
 async function removeBackground(bitmap, session) {
   const edge = 320, area = edge * edge;
+  const scale = edge / Math.max(bitmap.width, bitmap.height);
+  const sampleWidth = Math.max(1, Math.round(bitmap.width * scale));
+  const sampleHeight = Math.max(1, Math.round(bitmap.height * scale));
+  const left = Math.floor((edge - sampleWidth) / 2);
+  const top = Math.floor((edge - sampleHeight) / 2);
   const sample = document.createElement("canvas"), canvas = document.createElement("canvas");
   let input, outputs;
   try {
-    drawToCanvas(sample, bitmap, edge, edge, "image/jpeg", "#ffffff", false);
+    sample.width = sample.height = edge;
     const ctx = sample.getContext("2d", { willReadFrequently: true });
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, edge, edge);
+    ctx.drawImage(bitmap, left, top, sampleWidth, sampleHeight);
     const pixels = ctx.getImageData(0, 0, edge, edge);
     const rgb = pixels.data;
     let brightest = 1;
@@ -1136,15 +1162,22 @@ async function removeBackground(bitmap, session) {
     const outputName = session.outputNames[0];
     outputs = await session.run({ [session.inputNames[0]]: input }, [outputName]);
     const mask = outputs[outputName].data;
+    if (mask.length !== area) throw new Error("The background removal model returned an invalid mask");
     let lo = Infinity, hi = -Infinity;
-    for (const value of mask) { lo = Math.min(lo, value); hi = Math.max(hi, value); }
+    for (let y = top; y < top + sampleHeight; y++) {
+      for (let x = left; x < left + sampleWidth; x++) {
+        const value = mask[y * edge + x];
+        lo = Math.min(lo, value);
+        hi = Math.max(hi, value);
+      }
+    }
     if (!Number.isFinite(lo) || hi - lo < 0.00001) throw new Error("No clear subject was detected. Try an image with a distinct foreground");
     for (let i = 0; i < area; i++) rgb[i * 4 + 3] = 255 * (mask[i] - lo) / (hi - lo);
     ctx.putImageData(pixels, 0, 0);
     drawToCanvas(canvas, bitmap, bitmap.width, bitmap.height, "image/png", "", false);
     const result = canvas.getContext("2d");
     result.globalCompositeOperation = "destination-in";
-    result.drawImage(sample, 0, 0, canvas.width, canvas.height);
+    result.drawImage(sample, left, top, sampleWidth, sampleHeight, 0, 0, canvas.width, canvas.height);
     return await toBlob(canvas, "image/png");
   } finally {
     input?.dispose();
@@ -1452,6 +1485,7 @@ const signUI = { ink: null, inkVersion: 0, inkTask: Promise.resolve() };
 function signOptions() {
   const pad = signUI.pad = h("canvas", { class: "sign-pad", width: "600", height: "160", "aria-label": "Signature drawing pad" });
   const upload = h("input", { class: "field", type: "file", accept: IMG_ACCEPT, "aria-label": "Upload signature image" });
+  const removePaper = h("input", { type: "checkbox", checked: "" });
   const clear = h("button", { class: "mini", type: "button", onclick: () => {
     ++signUI.inkVersion;
     signUI.ink = null;
@@ -1467,16 +1501,8 @@ function signOptions() {
   signUI.x = h("input", { class: "field", type: "number", min: "0", max: "100", value: "75", "aria-label": "Signature horizontal position" });
   signUI.y = h("input", { class: "field", type: "number", min: "0", max: "100", value: "87", "aria-label": "Signature vertical position" });
   signUI.size = h("input", { class: "field", type: "number", min: "5", max: "85", value: "25", "aria-label": "Signature width" });
-  const sizeSlider = h("input", { type: "range", min: signUI.size.min, max: signUI.size.max, value: signUI.size.value });
-  sizeSlider.addEventListener("input", () => {
-    signUI.size.value = sizeSlider.value;
-    updateSignatureMarker();
-    edited(sizeSlider);
-  });
-  signUI.size.addEventListener("input", () => {
-    if (signUI.size.validity.valid && signUI.size.value !== "") sizeSlider.value = signUI.size.value;
-  });
   signUI.preview = pdfPreview("PDF signature placement preview");
+  signUI.preview.surface.classList.add("signature-placement");
   signUI.marker = h("img", { class: "signature-marker", alt: "", hidden: "" });
   signUI.preview.surface.append(signUI.marker);
   signUI.pageInfo = h("p", { class: "fine editor-info", role: "status" });
@@ -1527,13 +1553,14 @@ function signOptions() {
       return;
     }
     edited(upload);
+    const cleanPaper = removePaper.checked;
     setSignature(async () => {
       const bitmap = await loadImage(file), canvas = document.createElement("canvas");
       try {
         const scale = Math.min(1, 1400 / bitmap.width, 600 / bitmap.height);
         drawToCanvas(canvas, bitmap, Math.max(1, Math.round(bitmap.width * scale)),
           Math.max(1, Math.round(bitmap.height * scale)), "image/png", "", false);
-        return await signatureFromCanvas(canvas);
+        return await signatureFromCanvas(canvas, cleanPaper);
       } finally {
         bitmap.close();
         releaseCanvas(canvas);
@@ -1548,25 +1575,32 @@ function signOptions() {
     updateSignatureMarker();
     edited(field);
   });
-  signUI.preview.surface.addEventListener("click", event => {
-    if (signUI.preview.surface.closest('[aria-busy="true"]')) return;
-    const [x, y] = pointerFraction(event, signUI.preview.surface);
+  const surface = signUI.preview.surface;
+  function placeSignature(event) {
+    const [x, y] = pointerFraction(event, surface);
     signUI.x.value = Math.round(x * 100);
     signUI.y.value = Math.round(y * 100);
     updateSignatureMarker();
-    edited(signUI.preview.surface);
+    edited(surface);
+  }
+  surface.addEventListener("pointerdown", event => {
+    if (!event.isPrimary || event.button !== 0 || surface.closest('[aria-busy="true"]')) return;
+    surface.setPointerCapture(event.pointerId);
+    placeSignature(event);
+  });
+  surface.addEventListener("pointermove", event => {
+    if (surface.hasPointerCapture(event.pointerId)) placeSignature(event);
   });
 
   return h("div", { class: "opt-stack" },
-    h("span", {}, "Draw your signature or upload a signature image. A transparent PNG works best."),
+    h("span", {}, "Draw your signature or upload a signature image."),
     pad, h("div", { class: "editor-actions" }, clear, h("label", {}, "Upload signature ", upload)), signUI.inkInfo,
+    h("label", { class: "fine" }, removePaper, " Remove white paper from the next signature upload"),
     h("div", { class: "pixel-fields" },
       h("label", {}, "Page number", signUI.page), h("label", {}, "Across (%)", signUI.x),
-      h("label", {}, "Down (%)", signUI.y)),
+      h("label", {}, "Down (%)", signUI.y), h("label", {}, "Width (%)", signUI.size)),
     signUI.pageInfo,
-    h("div", { class: "signature-size-controls" },
-      h("label", {}, "Signature size", sizeSlider), h("label", {}, "Width (%)", signUI.size)),
-    h("span", { class: "fine" }, "Resize your signature with the slider or enter its width as a percentage of the page. Click the preview to place it."),
+    h("span", { class: "fine" }, "Click, tap, or drag on the page to place the signature. You can also enter its position above."),
     signUI.preview.surface, signUI.preview.info);
 }
 
@@ -1590,9 +1624,24 @@ function setSignature(makeInk, success, onReady) {
   })();
 }
 
-async function signatureFromCanvas(canvas) {
+async function signatureFromCanvas(canvas, removePaper = false) {
   const { width, height } = canvas;
-  const rgba = canvas.getContext("2d").getImageData(0, 0, width, height).data;
+  const ctx = canvas.getContext("2d");
+  const pixels = ctx.getImageData(0, 0, width, height);
+  const rgba = pixels.data;
+  if (removePaper) {
+    for (let i = 0; i < rgba.length; i += 4) {
+      const white = Math.min(rgba[i], rgba[i + 1], rgba[i + 2]);
+      if (white >= 240) {
+        rgba[i + 3] = 0;
+      } else if (rgba[i + 3] === 255) {
+        const alpha = 1 - white / 255;
+        for (let channel = 0; channel < 3; channel++) rgba[i + channel] = (rgba[i + channel] - white) / alpha;
+        rgba[i + 3] = Math.round(255 * alpha);
+      }
+    }
+    ctx.putImageData(pixels, 0, 0);
+  }
   let left = width, top = height, right = -1, bottom = -1;
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -1922,9 +1971,17 @@ function buildHome() {
   const grid = h("div", { class: "bento" }, cards.map(card => card.link));
   const search = h("input", { type: "search", placeholder: "Try “merge PDF” or “resize”", "aria-label": "Search PDF and image tools", "aria-controls": "tool-directory" });
   const status = h("p", { class: "sr", role: "status" });
-  const empty = h("p", { class: "empty-search", hidden: "" }, "No tools match. Try a different search or category.");
+  const empty = h("div", { class: "empty-search", hidden: "" },
+    h("p", {}, "No tools match your search."),
+    h("button", { type: "button", onclick: () => {
+      search.value = "";
+      group = "all";
+      refresh();
+      search.focus();
+    } }, "Reset search and filters"));
   let group = "all", matches = cards;
-  const filters = [["all", "All tools"], ["pdf", "PDF"], ["img", "Image"]].map(([id, label]) => {
+  const categories = [["all", "All tools"], ["pdf", "PDF"], ["img", "Image"]];
+  const filters = categories.map(([id, label]) => {
     return h("button", { type: "button", "aria-pressed": String(id === group), onclick: () => {
       group = id;
       refresh();
@@ -1932,11 +1989,11 @@ function buildHome() {
   });
 
   function refresh() {
-    const terms = search.value.toLowerCase().trim().split(/\s+/).filter(Boolean);
+    const terms = search.value.toLowerCase().match(/[a-z0-9]+/g) || [];
     matches = cards.filter(({ tool, keywords }) =>
       (group === "all" || (tool.groups || [tool.group]).includes(group)) && terms.every(term => keywords.includes(term)));
     for (const card of cards) card.link.hidden = !matches.includes(card);
-    filters.forEach((filter, index) => filter.setAttribute("aria-pressed", String(group === ["all", "pdf", "img"][index])));
+    filters.forEach((filter, index) => filter.setAttribute("aria-pressed", String(group === categories[index][0])));
     grid.classList.toggle("is-filtered", group !== "all" || terms.length > 0);
     grid.dataset.count = matches.length;
     empty.hidden = matches.length !== 0;
