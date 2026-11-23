@@ -2032,7 +2032,163 @@ async function extractText(files, progress) {
 }
 
 
+const passportUI = {};
+function passportOptions() {
+  const number = (min, max, value) => h("input", { class: "field", type: "number", min, max, value, required: "" });
+  passportUI.width = number(10, 100, 35);
+  passportUI.height = number(10, 100, 45);
+  passportUI.x = h("input", { type: "range", min: "0", max: "100", value: "50", class: "placement-slider" });
+  passportUI.y = h("input", { type: "range", min: "0", max: "100", value: "50", class: "placement-slider" });
+  passportUI.format = h("select", { class: "field" }, opt("png", "Single photo (PNG)"), opt("a4", "A4 print sheet (PDF)"), opt("4x6", "4 × 6 inch print sheet (PDF)"));
+  passportUI.copies = number(1, 24, 6);
+  const copies = h("label", { hidden: "" }, "Copies ", passportUI.copies);
+  passportUI.canvas = h("canvas", { class: "passport-preview", hidden: "", role: "img", "aria-label": "Cropped photo preview" });
+  passportUI.info = h("p", { class: "fine editor-info", role: "status" });
+  const settings = h("div", { class: "opt-stack", oninput: event => {
+    copies.hidden = passportUI.format.value === "png";
+    refreshPassportPreview();
+    edited(event.target);
+  } }, h("div", { class: "pixel-fields" },
+    h("label", {}, "Width (mm) ", passportUI.width), h("label", {}, "Height (mm) ", passportUI.height)),
+    h("p", { class: "fine" }, "Enter the dimensions required for your application. Print PDF sheets at actual size."),
+    h("label", {}, "Horizontal crop ", passportUI.x), h("label", {}, "Vertical crop ", passportUI.y),
+    h("label", {}, "Output ", passportUI.format), copies, passportUI.info, passportUI.canvas);
+  return settings;
+}
+
+function passportDimensions() {
+  const { width, height } = passportUI;
+  if (!width.validity.valid || !height.validity.valid) return null;
+  return [width.valueAsNumber, height.valueAsNumber];
+}
+
+function drawPassportCrop(canvas, image, width, height) {
+  const scale = Math.max(width / image.width, height / image.height);
+  const sourceWidth = width / scale, sourceHeight = height / scale;
+  const x = (image.width - sourceWidth) * Number(passportUI.x.value) / 100;
+  const y = (image.height - sourceHeight) * Number(passportUI.y.value) / 100;
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(image, x, y, sourceWidth, sourceHeight, 0, 0, width, height);
+}
+
+function refreshPassportPreview() {
+  const dimensions = passportDimensions();
+  passportUI.canvas.hidden = !passportUI.image || !dimensions;
+  if (passportUI.canvas.hidden) return;
+  drawPassportCrop(passportUI.canvas, passportUI.image, ...dimensions.map(mm => Math.round(mm * 3)));
+}
+
+async function passportOnFiles(files) {
+  const file = files[0];
+  if (passportUI.file === file) return;
+  passportUI.file = file;
+  passportUI.image?.close();
+  passportUI.image = null;
+  refreshPassportPreview();
+  passportUI.info.textContent = file ? "Loading photo preview…" : "";
+  const token = passportUI.previewToken = {};
+  if (!file) return;
+  try {
+    const image = await loadImage(file);
+    if (passportUI.previewToken !== token) { image.close(); return; }
+    passportUI.image = image;
+    passportUI.info.textContent = "";
+    refreshPassportPreview();
+  } catch (error) {
+    if (passportUI.previewToken === token) passportUI.info.textContent = error.message;
+  }
+}
+
+async function makePassportPhoto([file], progress) {
+  const dimensions = passportDimensions();
+  if (!dimensions) throw new Error("Enter a width and height from 10 to 100 mm");
+  const format = passportUI.format.value;
+  if (format !== "png" && !passportUI.copies.validity.valid) throw new Error("Enter between 1 and 24 copies");
+  const canvas = document.createElement("canvas");
+  const image = await loadImage(file);
+  try {
+    drawPassportCrop(canvas, image, ...dimensions.map(mm => Math.round(mm * 300 / 25.4)));
+    const portrait = await toBlob(canvas, "image/png");
+    const name = stem(file) + "-passport-photo";
+    if (format === "png") return { blob: portrait, filename: name + ".png", summary: canvas.width + " × " + canvas.height + " pixels" };
+    await requireLibrary("PDFLib");
+    const mm = value => value * 72 / 25.4;
+    const [pageWidth, pageHeight] = format === "a4" ? [mm(210), mm(297)] : [288, 432];
+    const [width, height] = dimensions.map(mm), gap = mm(3), margin = mm(5);
+    const columns = Math.floor((pageWidth - 2 * margin + gap) / (width + gap));
+    const rows = Math.floor((pageHeight - 2 * margin + gap) / (height + gap));
+    const capacity = columns * rows;
+    if (!capacity) throw new Error("This photo size does not fit on the selected paper");
+    const doc = await PDFLib.PDFDocument.create();
+    const embedded = await doc.embedPng(await portrait.arrayBuffer());
+    const copies = passportUI.copies.valueAsNumber;
+    for (let offset = 0; offset < copies; offset += capacity) {
+      const page = doc.addPage([pageWidth, pageHeight]);
+      const onPage = Math.min(capacity, copies - offset);
+      const usedColumns = Math.min(columns, onPage), usedRows = Math.ceil(onPage / columns);
+      const left = (pageWidth - usedColumns * width - (usedColumns - 1) * gap) / 2;
+      const top = (pageHeight + usedRows * height + (usedRows - 1) * gap) / 2;
+      for (let i = 0; i < onPage; i++) {
+        page.drawImage(embedded, { x: left + i % columns * (width + gap), y: top - height - Math.floor(i / columns) * (height + gap), width, height });
+      }
+      progress(30 + 60 * (offset + onPage) / copies);
+    }
+    return { blob: pdfBlob(await doc.save()), filename: name + ".pdf", summary: copies + " copies · " + dimensions.join(" × ") + " mm" };
+  } finally { image.close(); releaseCanvas(canvas); }
+}
+
+const pageNumberUI = {};
+function pageNumberOptions() {
+  pageNumberUI.position = h("select", { class: "field" },
+    opt("bottom-center", "Bottom center"), opt("bottom-left", "Bottom left"), opt("bottom-right", "Bottom right"),
+    opt("top-center", "Top center"), opt("top-left", "Top left"), opt("top-right", "Top right"));
+  pageNumberUI.start = h("input", { class: "field", type: "number", min: "1", max: "999999", value: "1", required: "" });
+  pageNumberUI.skip = h("input", { type: "checkbox" });
+  const settings = h("div", { class: "opt-stack", oninput: event => edited(event.target) },
+    h("label", {}, "Position ", pageNumberUI.position),
+    h("label", {}, "First number ", pageNumberUI.start),
+    h("label", {}, pageNumberUI.skip, " Skip the first page"));
+  return settings;
+}
+
+async function addPageNumbers([file], progress) {
+  if (!pageNumberUI.start.validity.valid) throw new Error("Enter a first number between 1 and 999999");
+  const doc = await loadPdf(file, { updateMetadata: false });
+  const font = await doc.embedFont(PDFLib.StandardFonts.Helvetica);
+  const pages = doc.getPages().slice(pageNumberUI.skip.checked ? 1 : 0);
+  if (!pages.length) throw new Error("No pages remain to number. Turn off Skip the first page");
+  const [edge, align] = pageNumberUI.position.value.split("-");
+  const start = pageNumberUI.start.valueAsNumber;
+  for (const [index, page] of pages.entries()) {
+    const crop = page.getCropBox(), rotation = ((page.getRotation().angle % 360) + 360) % 360;
+    const sideways = rotation === 90 || rotation === 270;
+    const [width, height] = sideways ? [crop.height, crop.width] : [crop.width, crop.height];
+    const text = String(start + index), shorter = Math.min(width, height);
+    const size = Math.min(12, shorter * 0.05, width * 0.8 / font.widthOfTextAtSize(text, 1));
+    const margin = Math.min(24, shorter * 0.06), textWidth = font.widthOfTextAtSize(text, size);
+    const x = align === "left" ? margin : align === "right" ? width - margin - textWidth : (width - textWidth) / 2;
+    const y = edge === "top" ? height - margin - size : margin;
+    const points = { 0: [x, y], 90: [crop.width - y, x], 180: [crop.width - x, crop.height - y], 270: [y, crop.height - x] };
+    const [px, py] = points[rotation] || points[0];
+    page.drawText(text, { x: crop.x + px, y: crop.y + py, size, font, rotate: PDFLib.degrees(rotation) });
+    progress(90 * (index + 1) / pages.length);
+  }
+  return { blob: pdfBlob(await doc.save({ updateFieldAppearances: false })), filename: baseName(file) + "-numbered.pdf",
+    summary: pages.length === 1 ? "1 page numbered" : pages.length + " pages numbered" };
+}
+
 const TOOLS = [
+  { id: "passport-photo-maker", title: "Passport Photo Maker", group: "utility",
+    blurb: "Crop a photo to custom dimensions and make a printable sheet.",
+    accept: IMG_ACCEPT, multiple: false, options: passportOptions, onFiles: passportOnFiles, action: "Create photo", process: makePassportPhoto },
+  { id: "pdf-page-numbers", title: "PDF Page Numbers", group: "pdf",
+    blurb: "Add page numbers where you want them and optionally skip the cover.",
+    accept: PDF_ACCEPT, multiple: false, options: pageNumberOptions, action: "Add page numbers", process: addPageNumbers },
+
   { id: "merge-pdf", title: "PDF Combiner", group: "pdf", size: "w4",
     blurb: "Combine several PDFs into one file, in the order you choose.",
     accept: ".pdf,application/pdf", multiple: true, action: "Merge files",
@@ -2111,6 +2267,8 @@ const TOOLS = [
    ===================================================================== */
 function buildHome() {
   const searchTerms = {
+    "passport-photo-maker": "id visa crop print photo size millimeters headshot",
+    "pdf-page-numbers": "number pages pagination footer header folio skip cover",
     "merge-pdf": "combine join",
     "split-pdf": "extract separate pages",
     "compress-pdf": "reduce shrink smaller",
@@ -2127,7 +2285,7 @@ function buildHome() {
     "sign-pdf": "signature autograph draw upload place electronic sign pdf"
   };
   const cards = TOOLS.map(tool => {
-    const category = tool.groups ? "PDF & Image" : tool.group === "pdf" ? "PDF" : "Image";
+    const category = tool.groups ? "PDF & Image" : { pdf: "PDF", img: "Image", utility: "Utility" }[tool.group];
     const link = h("a", { class: "card " + tool.group + (tool.size ? " " + tool.size : ""), href: routeUrl(tool.id), "data-route": tool.id },
       h("div", { class: "card-top" }, iconEl(tool.id)),
       h("h3", {}, tool.title),
@@ -2147,7 +2305,7 @@ function buildHome() {
       search.focus();
     } }, "Reset search and filters"));
   let group = "all", matches = cards;
-  const categories = [["all", "All tools"], ["pdf", "PDF"], ["img", "Image"]];
+  const categories = [["all", "All tools"], ["pdf", "PDF"], ["img", "Image"], ["utility", "Utilities"]];
   const filters = categories.map(([id, label]) => {
     return h("button", { type: "button", "aria-pressed": String(id === group), onclick: () => {
       group = id;
@@ -2185,7 +2343,7 @@ function buildHome() {
       form, shortcuts),
     h("section", { class: "directory", id: "tool-directory", "aria-labelledby": "directory-title" },
       h("div", { class: "directory-head" }, h("h2", { id: "directory-title" }, "Browse tools"),
-        h("div", { class: "tool-filters", role: "group", "aria-label": "Filter tools by file type" }, filters)),
+        h("div", { class: "tool-filters", role: "group", "aria-label": "Filter tools by category" }, filters)),
       status, empty, grid));
 }
 
@@ -2206,6 +2364,14 @@ function buildTool(t) {
    SEO: per-route title, description, how-to text, FAQ and FAQ structured data
    ===================================================================== */
 const SEO = {
+ "passport-photo-maker": {
+  title: "Passport Photo Maker | Fileroom",
+  desc: "Crop a photo to custom dimensions and download a PNG or a printable PDF sheet."
+ },
+ "pdf-page-numbers": {
+  title: "Add Page Numbers to a PDF | Fileroom",
+  desc: "Number PDF pages at a chosen position, set a starting number, and optionally skip the cover."
+ },
  "organize-pdf": {
   title: "Organize PDF – Reorder, Rotate or Delete Pages | Fileroom",
   desc: "Preview, reorder, rotate and delete PDF pages in your browser. Download the organized PDF.",
@@ -2499,6 +2665,8 @@ function setSeo(id) {
    POLISH: icons, badges, toasts, copy-link
    ===================================================================== */
 const ICONS = {
+  "passport-photo-maker": '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M5 16a4 4 0 0 1 8 0m2-6h3m-3 4h3"/>',
+  "pdf-page-numbers": '<path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM13 2v7h7m-9 4-1 6m5-6-1 6m-5-4h8m-9 2h8"/>',
   "organize-pdf": '<rect x="3" y="4" width="7" height="16" rx="1"/><rect x="14" y="4" width="7" height="7" rx="1"/><rect x="14" y="15" width="7" height="5" rx="1"/>',
   "crop-image": '<path d="M6 3v14a1 1 0 0 0 1 1h14M3 6h14a1 1 0 0 1 1 1v14"/>',
   "extract-text": '<path d="M4 8V4h4m8 0h4v4m0 8v4h-4m-8 0H4v-4M8 9h8m-8 3h8m-8 3h5"/>',
