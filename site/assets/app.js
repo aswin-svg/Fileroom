@@ -96,19 +96,26 @@ function createUploader(cfg) {
 
   const input  = h("input", { type: "file", accept: cfg.accept, class: "sr", id: "f-" + cfg.id });
   if (cfg.multiple) input.multiple = true;
+  const fileTypes = cfg.accept.includes(PDF_ACCEPT)
+    ? (cfg.accept.includes(IMG_ACCEPT) ? "PDF up to 50 MB · JPG, PNG or WebP up to 25 MB" : "PDF up to 50 MB")
+    : "JPG, PNG or WebP up to 25 MB";
   const zone   = h("label", { class: "zone", for: "f-" + cfg.id },
-    h("strong", {}, cfg.multiple ? "Drop your files here" : "Drop your file here"),
-    h("span", {}, "or click to browse. Nothing leaves your device."));
+    iconEl(cfg.id),
+    h("strong", {}, cfg.multiple ? "Choose or drop files" : "Choose or drop a file"),
+    h("span", {}, fileTypes));
   const list   = h("ul", { class: "files" });
   const bar    = h("span");
-  const track  = h("div", { class: "bar", role: "progressbar", "aria-label": "Processing progress", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": "0" }, bar);
-  const status = h("p", { class: "status", role: "status", "aria-atomic": "true" });
+  const track  = h("div", { class: "bar", role: "progressbar", "aria-label": "Processing progress", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": "0", hidden: "" }, bar);
+  const status = h("p", { class: "status" });
   const announce = h("p", { class: "sr", role: "status", "aria-atomic": "true" });
   const run    = h("button", { class: "btn run", type: "button" }, cfg.action);
   const clear  = h("button", { class: "btn", type: "button" }, "Clear files");
   const dl     = h("button", { class: "btn dl", type: "button" }, "Download result");
-  const summary = h("span", { class: "summary" });
-  const optsEl = h("fieldset", { class: "opts" }, typeof cfg.options === "function" ? cfg.options() : cfg.options);
+  const summary = h("p", { class: "summary result-summary" });
+  const resultActions = h("div", { class: "result-actions", hidden: "" }, dl, summary);
+  const optsEl = h("fieldset", { class: "opts" }, h("legend", {}, "Settings"),
+    typeof cfg.options === "function" ? cfg.options() : cfg.options);
+  optsEl.hidden = !cfg.options;
 
   const nextTool = h("select", { class: "field", "aria-label": "Next tool" });
   const sendResult = h("button", { class: "btn", type: "button" }, "Open tool");
@@ -134,7 +141,7 @@ function createUploader(cfg) {
     cutoutImage, h("figcaption", {}, "Checkerboard areas are transparent in the downloaded PNG."));
   const uploader = h("div", { class: "uploader" },
     input, zone, alert, list, optsEl, track, status,
-    h("div", { class: "actions" }, run, clear, summary, dl), ...(cutout ? [cutout] : []), textResult, workflow);
+    h("div", { class: "actions" }, run, clear), resultActions, ...(cutout ? [cutout] : []), textResult, workflow);
 
   function warn(message = "") {
     alert.textContent = message;
@@ -142,16 +149,29 @@ function createUploader(cfg) {
   }
 
   // Clear the result whenever the file list changes (reorder, remove).
-  function touch() { result = null; warn(); setProgress(0); status.textContent = ""; render(); }
+  function touch() { result = null; warn(); setProgress(0); status.textContent = ""; delete status.dataset.state; render(); }
 
   // Up / Down / Remove buttons for one row (used when a tool sets reorder: true).
   const rowTools = i => {
     const btn = (label, aria, off, fn) => { const b = h("button", { class: "mini", type: "button", "aria-label": aria }, label); b.disabled = off; b.addEventListener("click", fn); return b; };
     const name = files[i].name;
-    return h("span", { class: "row-tools" },
-      btn("Up", "Move " + name + " up", busy || i === 0, () => { [files[i - 1], files[i]] = [files[i], files[i - 1]]; touch(); }),
-      btn("Down", "Move " + name + " down", busy || i === files.length - 1, () => { [files[i + 1], files[i]] = [files[i], files[i + 1]]; touch(); }),
-      btn("Remove", "Remove " + name, busy, () => { files.splice(i, 1); touch(); }));
+    const move = offset => {
+      const next = i + offset;
+      [files[next], files[i]] = [files[i], files[next]];
+      touch();
+      list.children[next]?.querySelector("button:last-child")?.focus();
+    };
+    const order = cfg.reorder && files.length > 1 ? [
+      btn("Up", "Move " + name + " up", busy || i === 0, () => move(-1)),
+      btn("Down", "Move " + name + " down", busy || i === files.length - 1, () => move(1))
+    ] : [];
+    return h("span", { class: "row-tools" }, order,
+      btn("Remove", "Remove " + name, busy, () => {
+        files.splice(i, 1);
+        touch();
+        const next = list.children[Math.min(i, files.length - 1)]?.querySelector("button:last-child");
+        (next || input).focus();
+      }));
   };
 
   const setProgress = p => {
@@ -163,13 +183,15 @@ function createUploader(cfg) {
   let previewBlob;
   function render() {
     list.replaceChildren(...files.map((f, i) =>
-      h("li", {}, h("span", { class: "name" }, f.name), h("span", { class: "size" }, result && result.sizes && result.sizes[i] != null ? fmt(f.size) + " → " + fmt(result.sizes[i]) : fmt(f.size)), ...(cfg.reorder ? [rowTools(i)] : []), ...(result?.targetNotes?.[i] ? [h("span", { class: "fine target-note" }, result.targetNotes[i])] : []))));
+      h("li", {}, h("span", { class: "name" }, f.name), h("span", { class: "size" }, result?.sizes?.[i] != null ? fmt(f.size) + " → " + fmt(result.sizes[i]) : fmt(f.size)), rowTools(i), ...(result?.targetNotes?.[i] ? [h("span", { class: "fine target-note" }, result.targetNotes[i])] : []))));
     uploader.setAttribute("aria-busy", String(busy));
     input.disabled = optsEl.disabled = busy;
     run.textContent = busy ? "Processing…" : cfg.action;
     run.disabled   = busy || !files.length;
     clear.disabled = busy || !files.length;
     dl.disabled    = busy || !result;
+    resultActions.hidden = !result;
+    track.hidden = !busy;
     summary.textContent = result && result.summary ? result.summary : "";
     dl.textContent = result && result.dlLabel ? result.dlLabel : "Download result";
     const parts = result?.parts || (result ? [{ blob: result.blob, name: result.filename }] : []);
@@ -201,29 +223,29 @@ function createUploader(cfg) {
     if (busy) return false;
     const all = [...fileList];
     if (!all.length) return false;
-    const oversized = all.find(f => f.size > fileLimit(f));
-    if (oversized) {
-      const pdf = isPdfFile(oversized);
-      warn(oversized.name + " exceeds the " + (pdf ? "50 MB PDF" : "25 MB image") + " limit. Choose a smaller file and try again.");
-      return false;
+    const ok = [], messages = [];
+    for (const file of all) {
+      if (!file.size) messages.push(file.name + " is empty.");
+      else if (!matches(file, cfg.accept)) messages.push(file.name + " is an unsupported file type.");
+      else if (file.size > fileLimit(file)) messages.push(file.name + " exceeds the " + (isPdfFile(file) ? "50 MB PDF" : "25 MB image") + " limit.");
+      else ok.push(file);
     }
-    warn();
-    const ok = all.filter(f => matches(f, cfg.accept) && f.size > 0);
-    const skipped = all.filter(f => !ok.includes(f));
-    if (skipped.length) {
-      const messages = skipped.map(f => f.name + (f.size === 0 ? " is empty." : " is an unsupported file type."));
-      warn(messages.join(" "));
-    }
+    if (!cfg.multiple && ok.length > 1) messages.push("Only " + ok[0].name + " was added. This tool uses one file at a time.");
+    warn(messages.join(" "));
     if (!ok.length) return false;
     result = null; setProgress(0);
     status.textContent = "";
+    delete status.dataset.state;
     files = cfg.multiple ? files.concat(ok) : ok.slice(0, 1);
     render();
     return ok.length > 0;
   }
 
   function reset() {
-    warn(); files = []; result = null; input.value = ""; setProgress(0); status.textContent = ""; render();
+    files = [];
+    input.value = "";
+    touch();
+    input.focus();
   }
 
   uploaderInputs.set(cfg.id, incoming => {
@@ -266,18 +288,23 @@ function createUploader(cfg) {
     warn();
     setProgress(0);
     status.textContent = "Processing…";
+    status.dataset.state = "working";
     announce.textContent = "Processing " + files.length + (files.length === 1 ? " file." : " files.");
     render();
     try {
+      await new Promise(resolve => setTimeout(resolve, 0));
       if (cfg.beforeRun) await cfg.beforeRun();
       const output = await cfg.process(files, setProgress);
       if (!(output?.blob instanceof Blob) || !output.blob.size) throw new Error("Processing did not produce a valid output file");
       result = output;
       announce.textContent = "Processing finished. Your result is ready.";
-      status.textContent = "Done. Your result is ready.";
+      status.textContent = "Ready to download: " + output.filename;
+      status.dataset.state = "done";
       toast(TOAST[cfg.id] || "Done. Your result is ready.");
     } catch (err) {
-      status.textContent = (err.message || "The file could not be processed") + ".";
+      const message = err?.message || "The file could not be processed";
+      status.textContent = /[.!?]$/.test(message) ? message : message + ".";
+      status.dataset.state = "error";
       announce.textContent = status.textContent;
       toast(status.textContent, "error");
     } finally {
@@ -1970,7 +1997,7 @@ function buildHome() {
   });
   const grid = h("div", { class: "bento" }, cards.map(card => card.link));
   const search = h("input", { type: "search", placeholder: "Try “merge PDF” or “resize”", "aria-label": "Search PDF and image tools", "aria-controls": "tool-directory" });
-  const status = h("p", { class: "sr", role: "status" });
+  const status = h("p", { class: "match-count", role: "status" }, TOOLS.length + " tools");
   const empty = h("div", { class: "empty-search", hidden: "" },
     h("p", {}, "No tools match your search."),
     h("button", { type: "button", onclick: () => {
@@ -2007,12 +2034,15 @@ function buildHome() {
     if (matches.length === 1) matches[0].link.click();
     else if (matches.length) matches[0].link.focus();
   } }, h("span", { class: "tool-search-icon", "aria-hidden": "true" }), search, h("button", { type: "submit" }, "Search"));
+  const shortcuts = h("nav", { class: "hero-shortcuts", "aria-label": "Quick access tools" },
+    [["merge-pdf", "Merge PDF"], ["compress-image", "Compress image"], ["sign-pdf", "Sign PDF"], ["background-remover", "Remove background"]]
+      .map(([id, label]) => h("a", { href: routeUrl(id), "data-route": id }, label)));
 
   return h("div", {},
     h("section", { class: "hero" },
       h("h1", {}, "Free ", h("span", {}, "PDF & Image Tools")),
       h("p", {}, "Merge, split, compress, resize, or convert files right in your browser. No uploads required."),
-      form),
+      form, shortcuts),
     h("section", { class: "directory", id: "tool-directory", "aria-labelledby": "directory-title" },
       h("div", { class: "directory-head" }, h("h2", { id: "directory-title" }, "Browse tools"),
         h("div", { class: "tool-filters", role: "group", "aria-label": "Filter tools by file type" }, filters)),
@@ -2021,7 +2051,10 @@ function buildHome() {
 
 function buildTool(t) {
   const panel = h("section", { class: "tool-panel " + t.group + "-tool" },
-    h("div", { class: "tool-head" }, h("div", { class: "tool-top" }, h("h1", {}, t.title), shareBtn(t.id)), h("p", {}, t.blurb)),
+    h("a", { class: "tool-back", href: routeUrl("home"), "data-route": "home" }, "← All tools"),
+    h("div", { class: "tool-head" },
+      h("div", { class: "tool-top" }, h("div", { class: "tool-title" }, iconEl(t.id), h("h1", {}, t.title)), shareBtn(t.id)),
+      h("p", {}, t.blurb)),
     createUploader(t));
   return panel;
 }
