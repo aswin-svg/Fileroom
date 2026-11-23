@@ -2285,7 +2285,7 @@ const TOOLS = [
     blurb: "Turn a link or text into a downloadable QR code.", render: qrCodeForm },
   { id: "date-converter", title: "BS ↔ AD Date Converter", group: "utility",
     blurb: "Convert dates between Bikram Sambat and the Gregorian calendar.", render: dateConverterForm },
-  { id: "merge-pdf", title: "PDF Combiner", group: "pdf", size: "w4",
+  { id: "merge-pdf", title: "PDF Combiner", group: "pdf",
     blurb: "Combine several PDFs into one file, in the order you choose.",
     accept: ".pdf,application/pdf", multiple: true, action: "Merge files",
     reorder: true, options: "Use Up, Down, and Remove to arrange the files. They are merged from top to bottom.", process: mergePdfs },
@@ -2300,17 +2300,17 @@ const TOOLS = [
     accept: ".pdf,application/pdf", multiple: false, action: "Compress file",
     options: compressOptions, process: compressPdf },
 
-  { id: "compress-image", title: "Image Compressor", group: "img", size: "w4",
+  { id: "compress-image", title: "Image Compressor", group: "img",
     blurb: "Reduce image file size or fit a limit such as 100 KB.",
     accept: IMG_ACCEPT, multiple: true, action: "Compress images",
     options: imgCompressOptions, onFiles: imgCompressOnFiles, beforeRun: stopPreview, process: compressImages },
 
-  { id: "resize-image", title: "Image Resizer", group: "img", size: "w3",
+  { id: "resize-image", title: "Image Resizer", group: "img",
     blurb: "Change width and height, or use a preset for forms and photos.",
     accept: IMG_ACCEPT, multiple: true, action: "Resize images",
     options: resizeOptions, onFiles: resizeOnFiles, process: resizeImages },
 
-  { id: "convert-image", title: "Image Format Converter", group: "img", size: "w3",
+  { id: "convert-image", title: "Image Format Converter", group: "img",
     blurb: "Switch between JPG, PNG, and WebP.",
     accept: IMG_ACCEPT, multiple: true, action: "Convert images",
     options: convertOptions, process: convertImages },
@@ -2320,7 +2320,7 @@ const TOOLS = [
     accept: PDF_ACCEPT, multiple: false, action: "Convert PDF to JPG",
     options: pdfJpgOptions, process: pdfToJpg },
 
-  { id: "watermark", title: "Watermark", group: "pdf", groups: ["pdf", "img"], size: "w4",
+  { id: "watermark", title: "Watermark", group: "pdf", groups: ["pdf", "img"],
     blurb: "Add a custom text watermark to PDFs or images.",
     accept: PDF_ACCEPT + "," + IMG_ACCEPT, multiple: true, action: "Apply watermark",
     options: watermarkOptions, onFiles: watermarkOnFiles, process: addWatermarks },
@@ -2331,27 +2331,27 @@ const TOOLS = [
     options: backgroundOptions,
     process: removeBackgrounds },
 
-  { id: "jpg-to-pdf", title: "JPG to PDF", group: "pdf", groups: ["pdf", "img"], size: "w4",
+  { id: "jpg-to-pdf", title: "JPG to PDF", group: "pdf", groups: ["pdf", "img"],
     blurb: "Combine JPG, PNG, or WebP images into one ordered PDF.",
     accept: IMG_ACCEPT, multiple: true, reorder: true, action: "Create PDF",
     options: imagePdfOptions, process: imagesToPdf },
 
-  { id: "organize-pdf", title: "Organize PDF", group: "pdf", size: "w3",
+  { id: "organize-pdf", title: "Organize PDF", group: "pdf",
     blurb: "Preview, reorder, rotate, or delete pages and save a new PDF.",
     accept: PDF_ACCEPT, multiple: false, action: "Save organized PDF",
     options: organizeOptions, onFiles: organizeOnFiles, process: organizePdf },
 
-  { id: "crop-image", title: "Crop Image", group: "img", size: "w3",
+  { id: "crop-image", title: "Crop Image", group: "img",
     blurb: "Crop freely, enter exact dimensions, or choose an aspect ratio.",
     accept: IMG_ACCEPT, multiple: false, action: "Crop image",
     options: cropOptions, onFiles: cropOnFiles, process: cropImage },
 
-  { id: "extract-text", title: "OCR / Extract Text", group: "pdf", groups: ["pdf", "img"], size: "w3",
+  { id: "extract-text", title: "OCR / Extract Text", group: "pdf", groups: ["pdf", "img"],
     blurb: "Copy text from photos, documents, and scanned PDF pages.",
     accept: PDF_ACCEPT + "," + IMG_ACCEPT, multiple: false, action: "Extract text",
     options: ocrOptions, process: extractText },
 
-  { id: "sign-pdf", title: "Sign PDF", group: "pdf", size: "w3",
+  { id: "sign-pdf", title: "Sign PDF", group: "pdf",
     blurb: "Draw or upload a signature and place it on a PDF page.",
     accept: PDF_ACCEPT, multiple: false, action: "Save signed PDF",
     options: signOptions, onFiles: signOnFiles, process: signPdf }
@@ -2384,7 +2384,7 @@ function buildHome() {
   };
   const cards = TOOLS.map(tool => {
     const category = tool.groups ? "PDF & Image" : { pdf: "PDF", img: "Image", utility: "Utility" }[tool.group];
-    const link = h("a", { class: "card " + tool.group + (tool.size ? " " + tool.size : ""), href: routeUrl(tool.id), "data-route": tool.id },
+    const link = h("a", { class: "card " + tool.group, href: routeUrl(tool.id), "data-route": tool.id },
       h("div", { class: "card-top" }, iconEl(tool.id)),
       h("h3", {}, tool.title),
       h("p", {}, tool.blurb),
@@ -2417,8 +2417,6 @@ function buildHome() {
       (group === "all" || (tool.groups || [tool.group]).includes(group)) && terms.every(term => keywords.includes(term)));
     for (const card of cards) card.link.hidden = !matches.includes(card);
     filters.forEach((filter, index) => filter.setAttribute("aria-pressed", String(group === categories[index][0])));
-    grid.classList.toggle("is-filtered", group !== "all" || terms.length > 0);
-    grid.dataset.count = matches.length;
     empty.hidden = matches.length !== 0;
     status.textContent = matches.length === 1 ? "1 tool found" : matches.length + " tools found";
   }
