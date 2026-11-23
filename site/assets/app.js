@@ -222,7 +222,7 @@ function createUploader(cfg) {
     }
     transferable = parts.map(({ blob, name }) => new File([blob], name, { type: blob.type }));
     const destinations = TOOLS.filter(tool =>
-      tool.id !== cfg.id && transferable.length > 0 && (tool.multiple || transferable.length === 1) &&
+      !tool.comingSoon && tool.id !== cfg.id && transferable.length > 0 && (tool.multiple || transferable.length === 1) &&
       transferable.every(file => matches(file, tool.accept) && file.size <= fileLimit(file)));
     textResult.hidden = busy || !result?.text;
     extracted.value = result?.text || "";
@@ -2073,8 +2073,8 @@ const TOOLS = [
     accept: PDF_ACCEPT + "," + IMG_ACCEPT, multiple: true, action: "Apply watermark",
     options: watermarkOptions, onFiles: watermarkOnFiles, process: addWatermarks },
 
-  { id: "background-remover", title: "Background Remover", group: "img",
-    blurb: "Isolate a subject and save it on a transparent background.",
+  { id: "background-remover", title: "Background Remover", group: "img", comingSoon: true,
+    blurb: "Coming soon. We’re improving the quality of background removal.",
     accept: IMG_ACCEPT, multiple: true, action: "Remove background",
     options: backgroundOptions,
     process: removeBackgrounds },
@@ -2195,7 +2195,7 @@ function buildTool(t) {
     h("div", { class: "tool-head" },
       h("div", { class: "tool-top" }, h("div", { class: "tool-title" }, iconEl(t.id), h("h1", {}, t.title)), shareBtn(t.id)),
       h("p", {}, t.blurb)),
-    createUploader(t));
+    t.comingSoon ? null : createUploader(t));
   return panel;
 }
 
@@ -2256,11 +2256,8 @@ const SEO = {
   faq: [["Does watermarking make PDF text unselectable?", "Existing PDF text remains selectable. The watermark is added as text."]]
  },
  "background-remover": {
-  title: "Free Image Background Remover | Fileroom",
-  desc: "Remove image backgrounds with on-device AI and download transparent PNGs. Your photos stay in your browser.",
-  heading: "How to remove an image background",
-  steps: ["Add a JPG, PNG or WebP with a clear subject.", "Run the background remover. Your browser loads the model and runtime if needed.", "Download your transparent PNG or a ZIP for multiple images."],
-  faq: [["Are my images sent to the model provider?", "No. Only the public model and runtime are downloaded. The model processes images in your browser."]]
+  title: "Background Remover – Coming Soon | Fileroom",
+  desc: "Coming soon. We’re improving the quality of background removal."
  },
 
  "home": {
@@ -2484,8 +2481,8 @@ function setSeo(id) {
     robots.remove();
   }
   ldApp.type = d.sections ? "application/json" : "application/ld+json";
-  ldFaq.type = ldApp.type;
-  if (d.sections) {
+  ldFaq.type = d.faq ? ldApp.type : "application/json";
+  if (d.sections || !d.faq) {
     infoEl.replaceChildren();
     return;
   }
