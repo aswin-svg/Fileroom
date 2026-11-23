@@ -137,8 +137,15 @@ function createUploader(cfg) {
 
   const alert = h("p", { class: "upload-alert", role: "alert", hidden: "" });
   const cutoutImage = cfg.id === "background-remover" ? h("img", { alt: "Image with its background removed" }) : null;
+  let cutoutBefore, cutoutAfter;
+  const compare = cutoutImage && h("button", { class: "mini", type: "button", "aria-pressed": "false", onclick: async () => {
+    const original = compare.getAttribute("aria-pressed") !== "true";
+    compare.setAttribute("aria-pressed", String(original));
+    cutoutImage.alt = original ? "Original image" : "Image with its background removed";
+    await previewImage(cutoutImage, original ? cutoutBefore : cutoutAfter).catch(() => {});
+  } }, "Show original");
   const cutout = cutoutImage && h("figure", { class: "cutout-result", hidden: "" },
-    cutoutImage, h("figcaption", {}, "Checkerboard areas are transparent in the downloaded PNG."));
+    cutoutImage, h("figcaption", {}, "Checkerboard areas are transparent in the downloaded PNG."), compare);
   const uploader = h("div", { class: "uploader" },
     input, zone, alert, list, optsEl, track, status,
     h("div", { class: "actions" }, run, clear), resultActions, ...(cutout ? [cutout] : []), textResult, workflow);
@@ -199,6 +206,11 @@ function createUploader(cfg) {
       const blob = parts[0]?.blob;
       if (blob !== previewBlob) {
         previewBlob = blob;
+        cutoutAfter = blob;
+        cutoutBefore = result?.previewOriginal;
+        compare.hidden = !cutoutBefore;
+        compare.setAttribute("aria-pressed", "false");
+        cutoutImage.alt = "Image with its background removed";
         cutout.hidden = true;
         cutoutImage.removeAttribute("src");
         if (blob) {
@@ -1045,21 +1057,80 @@ const watermarkUI = {};
 function watermarkOptions() {
   watermarkUI.text = h("input", { class: "field", maxlength: "100", placeholder: "e.g. CONFIDENTIAL", "aria-label": "Watermark text" });
   watermarkUI.position = h("select", { class: "field", "aria-label": "Watermark position" },
-    opt("center", "Center"), opt("top-left", "Top left"), opt("bottom-right", "Bottom right"));
+    opt("center", "Center"), opt("top-left", "Top left"), opt("bottom-right", "Bottom right"), opt("custom", "Custom"));
   watermarkUI.size = h("input", { class: "field", type: "number", min: "1", max: "25", value: "8", "aria-label": "Watermark size" });
   watermarkUI.opacity = h("input", { class: "field", type: "number", min: "1", max: "100", value: "45", "aria-label": "Watermark opacity" });
   watermarkUI.color = h("input", { type: "color", value: "#000000", "aria-label": "Watermark color" });
+  watermarkUI.x = h("input", { class: "field", type: "number", min: "0", max: "100", step: "0.01", value: "50" });
+  watermarkUI.y = h("input", { class: "field", type: "number", min: "0", max: "100", step: "0.01", value: "50" });
+  watermarkUI.custom = h("div", { class: "pixel-fields", hidden: "" },
+    h("label", {}, "Across (%) ", watermarkUI.x), h("label", {}, "Down (%) ", watermarkUI.y));
+  watermarkUI.preview = pdfPreview("First page of the first PDF");
+  watermarkUI.ink = h("canvas");
+  watermarkUI.overlay = h("div", { class: "pdf-overlay", hidden: "", "aria-hidden": "true" }, watermarkUI.ink);
+  const surface = watermarkUI.preview.surface;
+  surface.append(watermarkUI.overlay);
+  dragPdfOverlay(surface, watermarkUI.overlay, (x, y) => {
+    watermarkUI.position.value = "custom";
+    watermarkUI.x.value = (x * 100).toFixed(2);
+    watermarkUI.y.value = (y * 100).toFixed(2);
+    updateWatermarkPreview();
+    edited(surface);
+  });
+  for (const field of [watermarkUI.text, watermarkUI.position, watermarkUI.size, watermarkUI.opacity, watermarkUI.color, watermarkUI.x, watermarkUI.y]) {
+    field.addEventListener("input", () => { updateWatermarkPreview(); edited(field); });
+  }
   return h("div", { class: "opt-stack" },
     h("label", {}, "Text ", watermarkUI.text),
     h("label", {}, "Position ", watermarkUI.position),
     h("label", {}, "Size (% of shorter side) ", watermarkUI.size),
     h("label", {}, "Opacity (%) ", watermarkUI.opacity),
     h("label", {}, "Color ", watermarkUI.color),
-    h("span", { class: "fine" }, "The watermark is added to every PDF page. Image outputs are PNG to preserve transparency."));
+    watermarkUI.custom,
+    h("span", { class: "fine" }, "Add a PDF and enter text to drag the watermark on the first page. The placement applies across all pages and files."),
+    surface, watermarkUI.preview.info);
 }
 
-function watermarkPosition(position, width, height, textWidth, textHeight) {
+function watermarkOnFiles(files) {
+  const file = files.find(isPdfFile);
+  if (file === watermarkUI.file) return;
+  watermarkUI.file = file;
+  watermarkUI.preview.show(file, 1, 0, updateWatermarkPreview);
+}
+
+function updateWatermarkPreview() {
+  const { canvas, surface } = watermarkUI.preview;
+  const { ink, overlay } = watermarkUI;
+  watermarkUI.custom.hidden = watermarkUI.position.value !== "custom";
+  const settings = watermarkSettings();
+  overlay.hidden = !settings || surface.hidden;
+  if (overlay.hidden) return;
+  const { width, height } = canvas;
+  const ctx = ink.getContext("2d");
+  const nominalSize = Math.min(width, height) * settings.size;
+  ctx.font = "bold " + nominalSize + "px Arial, sans-serif";
+  const measured = ctx.measureText(settings.text).width;
+  const size = nominalSize * Math.min(1, width * 0.9 / Math.max(1, measured));
+  const textWidth = measured * size / nominalSize;
+  const [x, y] = watermarkPosition(settings, width, height, textWidth, size);
+  const appearance = JSON.stringify([settings.text, size, textWidth, settings.color, settings.opacity]);
+  if (watermarkUI.appearance !== appearance) {
+    watermarkUI.appearance = appearance;
+    ink.width = Math.max(1, Math.ceil(textWidth));
+    ink.height = Math.max(1, Math.ceil(size));
+    ctx.font = "bold " + size + "px Arial, sans-serif";
+    ctx.fillStyle = settings.color;
+    ctx.globalAlpha = settings.opacity;
+    ctx.textBaseline = "bottom";
+    ctx.fillText(settings.text, 0, ink.height, ink.width);
+  }
+  positionPdfOverlay(overlay, canvas, [x, height - y - size, textWidth, size]);
+}
+
+function watermarkPosition({ position, x, y }, width, height, textWidth, textHeight) {
   const margin = Math.min(width, height) * 0.05;
+  if (position === "custom") return [clamp(width * x - textWidth / 2, 0, width - textWidth),
+    clamp(height * (1 - y) - textHeight / 2, 0, height - textHeight)];
   if (position === "top-left") return [margin, height - margin - textHeight];
   if (position === "bottom-right") return [width - margin - textWidth, margin];
   return [(width - textWidth) / 2, (height - textHeight) / 2];
@@ -1079,7 +1150,7 @@ async function watermarkPdf(file, settings) {
     const sideways = rotation === 90 || rotation === 270;
     const width = sideways ? crop.height : crop.width, height = sideways ? crop.width : crop.height;
     const size = Math.min(Math.min(width, height) * settings.size, width * 0.9 / unitWidth);
-    const [x, y] = watermarkPosition(settings.position, width, height, unitWidth * size, size);
+    const [x, y] = watermarkPosition(settings, width, height, unitWidth * size, size);
     const coordinates = {
       0: [x, y], 90: [crop.width - y, x],
       180: [crop.width - x, crop.height - y], 270: [y, crop.height - x]
@@ -1100,7 +1171,7 @@ async function watermarkImage(bitmap, settings) {
     const size = Math.min(width, height) * settings.size;
     ctx.font = "bold " + size + "px sans-serif";
     const textWidth = Math.min(width * 0.9, ctx.measureText(settings.text).width);
-    const [x, y] = watermarkPosition(settings.position, width, height, textWidth, size);
+    const [x, y] = watermarkPosition(settings, width, height, textWidth, size);
     ctx.globalAlpha = settings.opacity;
     ctx.fillStyle = settings.color;
     ctx.textBaseline = "bottom";
@@ -1111,13 +1182,18 @@ async function watermarkImage(bitmap, settings) {
   }
 }
 
-async function addWatermarks(files, onProgress) {
+function watermarkSettings() {
   const text = watermarkUI.text.value.trim();
-  if (!text) throw new Error("Enter watermark text");
-  if (!watermarkUI.size.validity.valid || !watermarkUI.opacity.validity.valid ||
-      !watermarkUI.size.value || !watermarkUI.opacity.value) throw new Error("Enter a valid size and opacity");
-  const settings = { text, position: watermarkUI.position.value, size: Number(watermarkUI.size.value) / 100,
+  if (!text || [watermarkUI.size, watermarkUI.opacity, watermarkUI.x, watermarkUI.y].some(field => !field.value || !field.validity.valid)) return null;
+  return { text, position: watermarkUI.position.value, size: Number(watermarkUI.size.value) / 100,
+    x: Number(watermarkUI.x.value) / 100, y: Number(watermarkUI.y.value) / 100,
     opacity: Number(watermarkUI.opacity.value) / 100, color: watermarkUI.color.value };
+}
+
+async function addWatermarks(files, onProgress) {
+  if (!watermarkUI.text.value.trim()) throw new Error("Enter watermark text");
+  const settings = watermarkSettings();
+  if (!settings) throw new Error("Enter a valid size, opacity, and position");
   if (files.some(isPdfFile)) await requireLibrary("PDFLib");
   return runBatch(files, onProgress, async (file, bitmap) => {
     const pdf = isPdfFile(file);
@@ -1130,6 +1206,20 @@ async function addWatermarks(files, onProgress) {
 const ORT_BASE = assetUrl("background/", "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/");
 const BG_MODEL = assetUrl("background/u2netp.onnx");
 let backgroundSession;
+let backgroundEdge;
+
+function backgroundOptions() {
+  backgroundEdge = h("input", { class: "placement-slider", type: "range", min: "0", max: "100", value: "50" });
+  const value = h("output", {}, "50%");
+  backgroundEdge.addEventListener("input", () => {
+    value.textContent = backgroundEdge.value + "%";
+    edited(backgroundEdge);
+  });
+  return h("div", { class: "opt-stack" },
+    h("label", {}, "Edge cleanup ", value, backgroundEdge),
+    h("p", { class: "fine" }, "Lower it to keep hair and fine detail. Raise it to remove more leftover background. Adjust and run again to compare."),
+    h("p", { class: "fine" }, hostedAssets ? "Your images stay on your device." : "Your images stay on your device. The first run may download the processing runtime."));
+}
 
 function getBackgroundSession() {
   if (!backgroundSession) {
@@ -1161,7 +1251,7 @@ function getBackgroundSession() {
   return backgroundSession;
 }
 
-async function removeBackground(bitmap, session) {
+async function removeBackground(bitmap, session, cleanup) {
   const edge = 320, area = edge * edge;
   const scale = edge / Math.max(bitmap.width, bitmap.height);
   const sampleWidth = Math.max(1, Math.round(bitmap.width * scale));
@@ -1199,7 +1289,13 @@ async function removeBackground(bitmap, session) {
       }
     }
     if (!Number.isFinite(lo) || hi - lo < 0.00001) throw new Error("No clear subject was detected. Try an image with a distinct foreground");
-    for (let i = 0; i < area; i++) rgb[i * 4 + 3] = 255 * (mask[i] - lo) / (hi - lo);
+    const floor = cleanup * 0.42;
+    const ceiling = 0.76 + cleanup * 0.16;
+    for (let i = 0; i < area; i++) {
+      const confidence = (mask[i] - lo) / (hi - lo);
+      const alpha = clamp((confidence - floor) / (ceiling - floor), 0, 1);
+      rgb[i * 4 + 3] = 255 * alpha * alpha * (3 - 2 * alpha);
+    }
     ctx.putImageData(pixels, 0, 0);
     drawToCanvas(canvas, bitmap, bitmap.width, bitmap.height, "image/png", "", false);
     const result = canvas.getContext("2d");
@@ -1216,10 +1312,15 @@ async function removeBackground(bitmap, session) {
 
 async function removeBackgrounds(files, onProgress) {
   onProgress(1);
+  const cleanup = Number(backgroundEdge.value) / 100;
   const session = await getBackgroundSession();
-  return runBatch(files, onProgress, async (file, image) => ({
-    blob: await removeBackground(image, session), name: stem(file) + "-transparent.png"
-  }), "transparent-images");
+  let firstOriginal;
+  const result = await runBatch(files, onProgress, async (file, image) => {
+    const blob = await removeBackground(image, session, cleanup);
+    firstOriginal ??= file;
+    return { blob, name: stem(file) + "-transparent.png" };
+  }, "transparent-images");
+  return { ...result, previewOriginal: firstOriginal };
 }
 
 /* --- PDF page editor --- */
@@ -1370,6 +1471,49 @@ function pointerFraction(event, surface) {
   const bounds = surface.getBoundingClientRect();
   return [clamp((event.clientX - bounds.left) / bounds.width, 0, 1),
     clamp((event.clientY - bounds.top) / bounds.height, 0, 1)];
+}
+
+function dragPdfOverlay(surface, overlay, place, resize) {
+  surface.classList.add("pdf-placement");
+  let drag;
+  function move(event) {
+    if (event.pointerId !== drag?.id) return;
+    const bounds = surface.getBoundingClientRect();
+    if (drag.resize) {
+      resize(drag.width + 100 * (event.clientX - drag.start) / bounds.width);
+      const box = overlay.getBoundingClientRect();
+      place(clamp(drag.left + box.width / bounds.width / 2, 0, 1),
+        clamp(drag.top + box.height / bounds.height / 2, 0, 1));
+      return;
+    }
+    place(
+      clamp((event.clientX - bounds.left) / bounds.width - drag.x, 0, 1),
+      clamp((event.clientY - bounds.top) / bounds.height - drag.y, 0, 1)
+    );
+  }
+  surface.addEventListener("pointerdown", event => {
+    if (!event.isPrimary || event.button !== 0 || overlay.hidden || surface.closest('[aria-busy="true"]')) return;
+    const box = overlay.getBoundingClientRect(), bounds = surface.getBoundingClientRect();
+    const grabbing = overlay.contains(event.target);
+    drag = {
+      id: event.pointerId, resize: Boolean(resize && event.target.closest(".resize-grip")),
+      width: 100 * box.width / bounds.width, start: event.clientX,
+      left: (box.left - bounds.left) / bounds.width, top: (box.top - bounds.top) / bounds.height,
+      x: grabbing ? (event.clientX - box.left - box.width / 2) / bounds.width : 0,
+      y: grabbing ? (event.clientY - box.top - box.height / 2) / bounds.height : 0
+    };
+    surface.setPointerCapture(event.pointerId);
+    if (!grabbing) move(event);
+  });
+  surface.addEventListener("pointermove", move);
+  surface.addEventListener("lostpointercapture", () => { drag = null; });
+}
+
+function positionPdfOverlay(overlay, canvas, [x, y, width, height]) {
+  overlay.style.left = (100 * x / canvas.width) + "%";
+  overlay.style.top = (100 * y / canvas.height) + "%";
+  overlay.style.width = (100 * width / canvas.width) + "%";
+  overlay.style.height = (100 * height / canvas.height) + "%";
 }
 function cropOptions() {
   cropUI.canvas = h("canvas", { class: "editor-canvas", "aria-label": "Image crop preview" });
@@ -1525,13 +1669,15 @@ function signOptions() {
   } }, "Clear signature");
   signUI.inkInfo = h("p", { class: "fine editor-info", role: "status" });
   signUI.page = h("input", { class: "field", type: "number", min: "1", step: "1", value: "1", "aria-label": "Signature page number" });
-  signUI.x = h("input", { class: "field", type: "number", min: "0", max: "100", value: "75", "aria-label": "Signature horizontal position" });
-  signUI.y = h("input", { class: "field", type: "number", min: "0", max: "100", value: "87", "aria-label": "Signature vertical position" });
+  signUI.x = h("input", { class: "field", type: "number", min: "0", max: "100", step: "0.01", value: "75", "aria-label": "Signature horizontal position" });
+  signUI.y = h("input", { class: "field", type: "number", min: "0", max: "100", step: "0.01", value: "87", "aria-label": "Signature vertical position" });
   signUI.size = h("input", { class: "field", type: "number", min: "5", max: "85", value: "25", "aria-label": "Signature width" });
+  const slider = h("input", { class: "placement-slider", type: "range", min: "5", max: "85", value: "25", "aria-label": "Resize signature" });
   signUI.preview = pdfPreview("PDF signature placement preview");
-  signUI.preview.surface.classList.add("signature-placement");
-  signUI.marker = h("img", { class: "signature-marker", alt: "", hidden: "" });
-  signUI.preview.surface.append(signUI.marker);
+  signUI.marker = h("img", { alt: "", draggable: "false" });
+  const grip = h("span", { class: "resize-grip", "aria-hidden": "true" }, "↘");
+  signUI.overlay = h("div", { class: "pdf-overlay", hidden: "" }, signUI.marker, grip);
+  signUI.preview.surface.append(signUI.overlay);
   signUI.pageInfo = h("p", { class: "fine editor-info", role: "status" });
 
   const ctx = pad.getContext("2d", { willReadFrequently: true });
@@ -1599,25 +1745,23 @@ function signOptions() {
     edited(signUI.page);
   });
   for (const field of [signUI.x, signUI.y, signUI.size]) field.addEventListener("input", () => {
+    if (signUI.size.validity.valid && signUI.size.value) slider.value = signUI.size.value;
     updateSignatureMarker();
     edited(field);
   });
   const surface = signUI.preview.surface;
-  function placeSignature(event) {
-    const [x, y] = pointerFraction(event, surface);
-    signUI.x.value = Math.round(x * 100);
-    signUI.y.value = Math.round(y * 100);
+  function resizeSignature(width) {
+    signUI.size.value = slider.value = Math.round(clamp(width, 5, 85));
     updateSignatureMarker();
     edited(surface);
   }
-  surface.addEventListener("pointerdown", event => {
-    if (!event.isPrimary || event.button !== 0 || surface.closest('[aria-busy="true"]')) return;
-    surface.setPointerCapture(event.pointerId);
-    placeSignature(event);
-  });
-  surface.addEventListener("pointermove", event => {
-    if (surface.hasPointerCapture(event.pointerId)) placeSignature(event);
-  });
+  slider.addEventListener("input", () => resizeSignature(Number(slider.value)));
+  dragPdfOverlay(surface, signUI.overlay, (x, y) => {
+    signUI.x.value = (x * 100).toFixed(2);
+    signUI.y.value = (y * 100).toFixed(2);
+    updateSignatureMarker();
+    edited(surface);
+  }, resizeSignature);
 
   return h("div", { class: "opt-stack" },
     h("span", {}, "Draw your signature or upload a signature image."),
@@ -1627,7 +1771,8 @@ function signOptions() {
       h("label", {}, "Page number", signUI.page), h("label", {}, "Across (%)", signUI.x),
       h("label", {}, "Down (%)", signUI.y), h("label", {}, "Width (%)", signUI.size)),
     signUI.pageInfo,
-    h("span", { class: "fine" }, "Click, tap, or drag on the page to place the signature. You can also enter its position above."),
+    h("label", {}, "Resize signature ", slider),
+    h("span", { class: "fine" }, "Drag the signature to move it. Drag its corner or use the slider to resize it."),
     signUI.preview.surface, signUI.preview.info);
 }
 
@@ -1732,14 +1877,9 @@ function signatureBox(width, height, ink, settings) {
 function updateSignatureMarker() {
   const { canvas, surface } = signUI.preview;
   const settings = signatureSettings();
-  signUI.marker.hidden = !signUI.ink || surface.hidden || !settings;
-  if (signUI.marker.hidden) return;
-  const [x, y, w, ht] = signatureBox(canvas.width, canvas.height, signUI.ink, settings);
-  const style = signUI.marker.style;
-  style.left = (x / canvas.width * 100) + "%";
-  style.top = (y / canvas.height * 100) + "%";
-  style.width = (w / canvas.width * 100) + "%";
-  style.height = (ht / canvas.height * 100) + "%";
+  signUI.overlay.hidden = !signUI.ink || surface.hidden || !settings;
+  if (signUI.overlay.hidden) return;
+  positionPdfOverlay(signUI.overlay, canvas, signatureBox(canvas.width, canvas.height, signUI.ink, settings));
 }
 
 async function signPdf(files, progress) {
@@ -1931,12 +2071,12 @@ const TOOLS = [
   { id: "watermark", title: "Watermark", group: "pdf", groups: ["pdf", "img"], size: "w4",
     blurb: "Add a custom text watermark to PDFs or images.",
     accept: PDF_ACCEPT + "," + IMG_ACCEPT, multiple: true, action: "Apply watermark",
-    options: watermarkOptions, process: addWatermarks },
+    options: watermarkOptions, onFiles: watermarkOnFiles, process: addWatermarks },
 
   { id: "background-remover", title: "Background Remover", group: "img",
     blurb: "Isolate a subject and save it on a transparent background.",
     accept: IMG_ACCEPT, multiple: true, action: "Remove background",
-    options: "Best with a clear foreground subject. " + (hostedAssets ? "The model and runtime load from this site." : "The model is embedded. Your browser may download about 11 MB of runtime files on first use.") + " Your images stay on your device.",
+    options: backgroundOptions,
     process: removeBackgrounds },
 
   { id: "jpg-to-pdf", title: "JPG to PDF", group: "pdf", groups: ["pdf", "img"], size: "w4",
