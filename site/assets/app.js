@@ -2126,40 +2126,69 @@ function dateConverterForm() {
 }
 
 const passportUI = {};
+const PASSPORT_WIDTH = 35, PASSPORT_HEIGHT = 45;
+const PASSPORT_SHEET = { width: 210, height: 297, columns: 5, rows: 6, gap: 3 };
+
 function passportOptions() {
-  const number = (min, max, value) => h("input", { class: "field", type: "number", min, max, value, required: "" });
-  passportUI.width = number(10, 100, 35);
-  passportUI.height = number(10, 100, 45);
-  passportUI.x = h("input", { type: "range", min: "0", max: "100", value: "50", class: "placement-slider" });
-  passportUI.y = h("input", { type: "range", min: "0", max: "100", value: "50", class: "placement-slider" });
-  passportUI.format = h("select", { class: "field" }, opt("png", "Single photo (PNG)"), opt("a4", "A4 print sheet (PDF)"), opt("4x6", "4 × 6 inch print sheet (PDF)"));
-  passportUI.copies = number(1, 24, 6);
-  const copies = h("label", { hidden: "" }, "Copies ", passportUI.copies);
-  passportUI.canvas = h("canvas", { class: "passport-preview", hidden: "", role: "img", "aria-label": "Cropped photo preview" });
+  const range = (min, max, value) => h("input", { type: "range", min, max, value, class: "placement-slider" });
+  passportUI.x = range(0, 100, 50);
+  passportUI.y = range(0, 100, 50);
+  passportUI.zoom = range(100, 250, 100);
+  passportUI.format = h("select", { class: "field" }, opt("png", "Single photo (PNG)"), opt("a4", "30 copies on A4 (PDF)"));
+  passportUI.canvas = h("canvas", { class: "passport-preview passport-portrait", role: "img", "aria-label": "Passport photo crop preview" });
+  passportUI.sheet = h("canvas", { class: "passport-preview", role: "img", "aria-label": "A4 sheet preview with 30 copies" });
+  passportUI.sheetFigure = h("figure", { hidden: "" }, passportUI.sheet, h("figcaption", {}, "A4 sheet · 30 copies"));
+  passportUI.layout = h("div", { class: "passport-layout", hidden: "" },
+    h("figure", {}, passportUI.canvas, h("figcaption", {}, "Single photo · 35 × 45 mm")), passportUI.sheetFigure);
   passportUI.info = h("p", { class: "fine editor-info", role: "status" });
-  const settings = h("div", { class: "opt-stack", oninput: event => {
-    copies.hidden = passportUI.format.value === "png";
+  const reset = h("button", { type: "button", class: "mini", onclick: () => {
+    passportUI.x.value = passportUI.y.value = "50";
+    passportUI.zoom.value = "100";
     refreshPassportPreview();
-    edited(event.target);
-  } }, h("div", { class: "pixel-fields" },
-    h("label", {}, "Width (mm) ", passportUI.width), h("label", {}, "Height (mm) ", passportUI.height)),
-    h("p", { class: "fine" }, "Enter the dimensions required for your application. Print PDF sheets at actual size."),
-    h("label", {}, "Horizontal crop ", passportUI.x), h("label", {}, "Vertical crop ", passportUI.y),
-    h("label", {}, "Output ", passportUI.format), copies, passportUI.info, passportUI.canvas);
-  return settings;
+    edited(reset);
+  } }, "Reset crop");
+  passportUI.controls = h("div", { class: "passport-frame-controls", hidden: "" }, h("label", {}, "Zoom", passportUI.zoom),
+    h("label", {}, "Horizontal position", passportUI.x), h("label", {}, "Vertical position", passportUI.y), reset);
+  enablePassportDrag();
+  return h("div", { class: "opt-stack", oninput: event => { refreshPassportPreview(); edited(event.target); } },
+    h("p", { class: "fine" }, "Upload a portrait and drag the photo to frame it. For the A4 sheet, print at actual size."),
+    passportUI.controls,
+    h("label", {}, "Download format ", passportUI.format), passportUI.info, passportUI.layout);
 }
 
-function passportDimensions() {
-  const { width, height } = passportUI;
-  if (!width.validity.valid || !height.validity.valid) return null;
-  return [width.valueAsNumber, height.valueAsNumber];
+function enablePassportDrag() {
+  const canvas = passportUI.canvas;
+  let drag;
+  canvas.addEventListener("pointerdown", event => {
+    if (!event.isPrimary || event.button !== 0 || canvas.closest('[aria-busy="true"]')) return;
+    const { width, height } = canvas.getBoundingClientRect();
+    const image = passportUI.image;
+    const [sourceWidth, sourceHeight] = passportCropSize(image, width, height);
+    drag = { id: event.pointerId, x: event.clientX, y: event.clientY,
+      startX: passportUI.x.valueAsNumber, startY: passportUI.y.valueAsNumber,
+      travelX: (image.width - sourceWidth) * width / sourceWidth,
+      travelY: (image.height - sourceHeight) * height / sourceHeight };
+    canvas.setPointerCapture(drag.id);
+  });
+  canvas.addEventListener("pointermove", event => {
+    if (event.pointerId !== drag?.id) return;
+    if (drag.travelX > 0) passportUI.x.value = Math.round(clamp(drag.startX - (event.clientX - drag.x) * 100 / drag.travelX, 0, 100));
+    if (drag.travelY > 0) passportUI.y.value = Math.round(clamp(drag.startY - (event.clientY - drag.y) * 100 / drag.travelY, 0, 100));
+    refreshPassportPreview();
+    edited(canvas);
+  });
+  canvas.addEventListener("lostpointercapture", () => { drag = null; });
+}
+
+function passportCropSize(image, width, height) {
+  const scale = Math.max(width / image.width, height / image.height) * passportUI.zoom.valueAsNumber / 100;
+  return [width / scale, height / scale];
 }
 
 function drawPassportCrop(canvas, image, width, height) {
-  const scale = Math.max(width / image.width, height / image.height);
-  const sourceWidth = width / scale, sourceHeight = height / scale;
-  const x = (image.width - sourceWidth) * Number(passportUI.x.value) / 100;
-  const y = (image.height - sourceHeight) * Number(passportUI.y.value) / 100;
+  const [sourceWidth, sourceHeight] = passportCropSize(image, width, height);
+  const x = (image.width - sourceWidth) * passportUI.x.valueAsNumber / 100;
+  const y = (image.height - sourceHeight) * passportUI.y.valueAsNumber / 100;
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d");
@@ -2169,10 +2198,30 @@ function drawPassportCrop(canvas, image, width, height) {
 }
 
 function refreshPassportPreview() {
-  const dimensions = passportDimensions();
-  passportUI.canvas.hidden = !passportUI.image || !dimensions;
-  if (passportUI.canvas.hidden) return;
-  drawPassportCrop(passportUI.canvas, passportUI.image, ...dimensions.map(mm => Math.round(mm * 3)));
+  passportUI.controls.hidden = passportUI.layout.hidden = !passportUI.image;
+  if (passportUI.layout.hidden) return;
+  drawPassportCrop(passportUI.canvas, passportUI.image, PASSPORT_WIDTH * 5, PASSPORT_HEIGHT * 5);
+  passportUI.sheetFigure.hidden = passportUI.format.value !== "a4";
+  if (passportUI.sheetFigure.hidden) return;
+  const sheet = passportUI.sheet;
+  sheet.width = PASSPORT_SHEET.width * 2;
+  sheet.height = PASSPORT_SHEET.height * 2;
+  const ctx = sheet.getContext("2d");
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, sheet.width, sheet.height);
+  for (const [x, y] of passportSheetPositions()) {
+    ctx.drawImage(passportUI.canvas, x * 2, y * 2, PASSPORT_WIDTH * 2, PASSPORT_HEIGHT * 2);
+  }
+}
+
+function passportSheetPositions() {
+  const { width, height, columns, rows, gap } = PASSPORT_SHEET;
+  const left = (width - columns * PASSPORT_WIDTH - (columns - 1) * gap) / 2;
+  const top = (height - rows * PASSPORT_HEIGHT - (rows - 1) * gap) / 2;
+  return Array.from({ length: columns * rows }, (_, index) => [
+    left + index % columns * (PASSPORT_WIDTH + gap),
+    top + Math.floor(index / columns) * (PASSPORT_HEIGHT + gap)
+  ]);
 }
 
 async function passportOnFiles(files) {
@@ -2197,40 +2246,34 @@ async function passportOnFiles(files) {
 }
 
 async function makePassportPhoto([file], progress) {
-  const dimensions = passportDimensions();
-  if (!dimensions) throw new Error("Enter a width and height from 10 to 100 mm");
-  const format = passportUI.format.value;
-  if (format !== "png" && !passportUI.copies.validity.valid) throw new Error("Enter between 1 and 24 copies");
   const canvas = document.createElement("canvas");
   const image = await loadImage(file);
   try {
-    drawPassportCrop(canvas, image, ...dimensions.map(mm => Math.round(mm * 300 / 25.4)));
+    drawPassportCrop(canvas, image, ...[PASSPORT_WIDTH, PASSPORT_HEIGHT].map(mm => Math.round(mm * 300 / 25.4)));
     const portrait = await toBlob(canvas, "image/png");
     const name = stem(file) + "-passport-photo";
-    if (format === "png") return { blob: portrait, filename: name + ".png", summary: canvas.width + " × " + canvas.height + " pixels" };
+    if (passportUI.format.value === "png") return { blob: portrait, filename: name + ".png", summary: "35 × 45 mm crop · " + canvas.width + " × " + canvas.height + " pixels" };
     await requireLibrary("PDFLib");
     const mm = value => value * 72 / 25.4;
-    const [pageWidth, pageHeight] = format === "a4" ? [mm(210), mm(297)] : [288, 432];
-    const [width, height] = dimensions.map(mm), gap = mm(3), margin = mm(5);
-    const columns = Math.floor((pageWidth - 2 * margin + gap) / (width + gap));
-    const rows = Math.floor((pageHeight - 2 * margin + gap) / (height + gap));
-    const capacity = columns * rows;
-    if (!capacity) throw new Error("This photo size does not fit on the selected paper");
     const doc = await PDFLib.PDFDocument.create();
+    const page = doc.addPage([mm(PASSPORT_SHEET.width), mm(PASSPORT_SHEET.height)]);
     const embedded = await doc.embedPng(await portrait.arrayBuffer());
-    const copies = passportUI.copies.valueAsNumber;
-    for (let offset = 0; offset < copies; offset += capacity) {
-      const page = doc.addPage([pageWidth, pageHeight]);
-      const onPage = Math.min(capacity, copies - offset);
-      const usedColumns = Math.min(columns, onPage), usedRows = Math.ceil(onPage / columns);
-      const left = (pageWidth - usedColumns * width - (usedColumns - 1) * gap) / 2;
-      const top = (pageHeight + usedRows * height + (usedRows - 1) * gap) / 2;
-      for (let i = 0; i < onPage; i++) {
-        page.drawImage(embedded, { x: left + i % columns * (width + gap), y: top - height - Math.floor(i / columns) * (height + gap), width, height });
+    const positions = passportSheetPositions();
+    const color = PDFLib.rgb(0.45, 0.45, 0.45);
+    for (const [left, top] of positions) {
+      const x = mm(left), y = mm(PASSPORT_SHEET.height - top - PASSPORT_HEIGHT);
+      page.drawImage(embedded, { x, y, width: mm(PASSPORT_WIDTH), height: mm(PASSPORT_HEIGHT) });
+      for (const dx of [-1, 1]) {
+        for (const dy of [-1, 1]) {
+          const cx = x + (dx > 0 ? mm(PASSPORT_WIDTH) : 0);
+          const cy = y + (dy > 0 ? mm(PASSPORT_HEIGHT) : 0);
+          page.drawLine({ start: { x: cx, y: cy }, end: { x: cx + dx * mm(1), y: cy }, thickness: 0.25, color });
+          page.drawLine({ start: { x: cx, y: cy }, end: { x: cx, y: cy + dy * mm(1) }, thickness: 0.25, color });
+        }
       }
-      progress(30 + 60 * (offset + onPage) / copies);
     }
-    return { blob: pdfBlob(await doc.save()), filename: name + ".pdf", summary: copies + " copies · " + dimensions.join(" × ") + " mm" };
+    progress(90);
+    return { blob: pdfBlob(await doc.save()), filename: name + "-a4.pdf", summary: positions.length + " copies · 35 × 45 mm · A4" };
   } finally { image.close(); releaseCanvas(canvas); }
 }
 
@@ -2275,8 +2318,8 @@ async function addPageNumbers([file], progress) {
 }
 
 const TOOLS = [
-  { id: "passport-photo-maker", title: "Passport Photo Maker", group: "utility",
-    blurb: "Crop a photo to custom dimensions and make a printable sheet.",
+  { id: "passport-photo-maker", title: "Passport Size Photo Maker", group: "utility",
+    blurb: "Make a 35 × 45 mm photo or a printable A4 sheet with 30 copies.",
     accept: IMG_ACCEPT, multiple: false, options: passportOptions, onFiles: passportOnFiles, action: "Create photo", process: makePassportPhoto },
   { id: "pdf-page-numbers", title: "PDF Page Numbers", group: "pdf",
     blurb: "Add page numbers where you want them and optionally skip the cover.",
@@ -2461,8 +2504,8 @@ function buildTool(t) {
    ===================================================================== */
 const SEO = {
  "passport-photo-maker": {
-  title: "Passport Photo Maker | Fileroom",
-  desc: "Crop a photo to custom dimensions and download a PNG or a printable PDF sheet."
+  title: "Passport Size Photo Maker | Fileroom",
+  desc: "Frame a 35 × 45 mm passport-size photo and download a PNG or an A4 sheet with 30 copies."
  },
  "pdf-page-numbers": {
   title: "Add Page Numbers to a PDF | Fileroom",
