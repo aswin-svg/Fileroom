@@ -319,3 +319,6 @@ html:has(.mobile-menu[open]){overflow:hidden}
 .card.utility{background:linear-gradient(145deg,var(--surface) 14%,var(--img-soft));--tone-c:var(--img)}
 .tool-panel.utility-tool{--tone:var(--img);--on-tone:var(--on-img);--tool-tint:var(--img-soft)}
 .passport-preview{display:block;max-width:min(100%,240px);max-height:260px;object-fit:contain;border:1px solid var(--line);border-radius:10px}
+.utility-form .field{width:100%}
+.utility-form label{display:grid;gap:6px;font-weight:600}
+.qr-preview{display:block;width:min(100%,320px);height:auto;image-rendering:pixelated;border:1px solid var(--line);border-radius:10px;background:#fff}

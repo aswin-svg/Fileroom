@@ -18,5 +18,7 @@
   "privacy",
   "contact",
   "passport-photo-maker",
-  "pdf-page-numbers"
+  "pdf-page-numbers",
+  "qr-code-generator",
+  "date-converter"
 ]

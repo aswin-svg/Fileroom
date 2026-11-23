@@ -222,7 +222,7 @@ function createUploader(cfg) {
     }
     transferable = parts.map(({ blob, name }) => new File([blob], name, { type: blob.type }));
     const destinations = TOOLS.filter(tool =>
-      !tool.comingSoon && tool.id !== cfg.id && transferable.length > 0 && (tool.multiple || transferable.length === 1) &&
+      tool.accept && !tool.comingSoon && tool.id !== cfg.id && transferable.length > 0 && (tool.multiple || transferable.length === 1) &&
       transferable.every(file => matches(file, tool.accept) && file.size <= fileLimit(file)));
     textResult.hidden = busy || !result?.text;
     extracted.value = result?.text || "";
@@ -2032,6 +2032,99 @@ async function extractText(files, progress) {
 }
 
 
+function qrCodeForm() {
+  const text = h("textarea", { class: "field", rows: "4", required: "", placeholder: "https://example.com" });
+  const canvas = h("canvas", { class: "qr-preview", hidden: "", role: "img", "aria-label": "Generated QR code" });
+  const status = h("p", { class: "status", role: "status" });
+  const download = h("button", { type: "button", class: "btn dl", hidden: "", onclick: async () => {
+    try {
+      const url = URL.createObjectURL(await toBlob(canvas, "image/png"));
+      const link = h("a", { href: url, download: "fileroom-qr.png" });
+      document.body.append(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    } catch (error) { status.textContent = error.message; }
+  } }, "Download PNG");
+  function clearResult() {
+    canvas.hidden = download.hidden = true;
+    status.textContent = "";
+  }
+  text.addEventListener("input", clearResult);
+  return h("form", { class: "uploader utility-form", onsubmit: event => {
+    event.preventDefault();
+    clearResult();
+    if (!text.value.trim()) { status.textContent = "Enter a link or text."; return; }
+    const tooLong = "The text is too long to fit in one QR code. Try a shorter link or message.";
+    if (new TextEncoder().encode(text.value).length > 2331) { status.textContent = tooLong; return; }
+    try {
+      const code = qrcode(0, "M");
+      code.addData(text.value, "Byte");
+      code.make();
+      const modules = code.getModuleCount(), quiet = 4, scale = 8;
+      canvas.width = canvas.height = (modules + quiet * 2) * scale;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#000";
+      for (let row = 0; row < modules; row++) {
+        for (let column = 0; column < modules; column++) {
+          if (code.isDark(row, column)) ctx.fillRect((column + quiet) * scale, (row + quiet) * scale, scale, scale);
+        }
+      }
+      canvas.hidden = download.hidden = false;
+      status.textContent = "QR code ready to download.";
+    } catch { status.textContent = tooLong; }
+  } }, h("label", {}, "Link or text", text),
+    h("div", { class: "actions" }, h("button", { type: "submit", class: "btn run" }, "Generate QR code"), download),
+    status, canvas);
+}
+
+function convertCalendarDate(value, fromBS) {
+  const digits = value.trim().replace(/[०-९]/g, digit => String(digit.charCodeAt(0) - 0x0966));
+  const parts = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(digits);
+  if (!parts) throw new Error("Enter a date in YYYY-MM-DD format.");
+  const [year, month, day] = parts.slice(1).map(Number);
+  if (month < 1 || month > 12 || day < 1 || day > 32) throw new Error("Enter a valid month and day.");
+  const format = (y, m, d) => [y, m, d].map(part => String(part).padStart(2, "0")).join("-");
+  if (fromBS) {
+    if (year < 2000 || year > 2090) throw new Error("Enter a BS date between 2000 and 2090.");
+    let date;
+    try { date = new NepaliDate.default(year, month - 1, day); }
+    catch { throw new Error("That day does not exist in the selected BS month."); }
+    const bs = date.getBS();
+    if (bs.year !== year || bs.month !== month - 1 || bs.date !== day) throw new Error("That day does not exist in the selected BS month.");
+    const ad = date.getAD();
+    return format(ad.year, ad.month + 1, ad.date);
+  }
+  const date = new Date(year, month - 1, day, 12);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) throw new Error("Enter a valid Gregorian date.");
+  let bs;
+  try { bs = NepaliDate.default.fromAD(date).getBS(); }
+  catch { throw new Error("That date is outside the supported range of BS 2000–2090."); }
+  return format(bs.year, bs.month + 1, bs.date);
+}
+
+function dateConverterForm() {
+  const direction = h("select", { class: "field" }, opt("bs", "BS to AD"), opt("ad", "AD to BS"));
+  const input = h("input", { class: "field", required: "", autocomplete: "off", placeholder: "YYYY-MM-DD" });
+  const result = h("p", { class: "status", role: "status" });
+  const clear = () => { result.textContent = ""; delete result.dataset.state; };
+  input.addEventListener("input", clear);
+  direction.addEventListener("change", clear);
+  return h("form", { class: "uploader utility-form", onsubmit: event => {
+    event.preventDefault();
+    const fromBS = direction.value === "bs";
+    try {
+      result.textContent = convertCalendarDate(input.value, fromBS) + (fromBS ? " AD" : " BS");
+      result.dataset.state = "done";
+    } catch (error) {
+      result.textContent = error.message;
+      result.dataset.state = "error";
+    }
+  } }, h("label", {}, "Conversion direction", direction),
+    h("label", {}, "Date (YYYY-MM-DD)", input),
+    h("p", { class: "fine" }, "Supports Bikram Sambat years 2000–2090. You can enter English or Nepali digits."),
+    h("div", { class: "actions" }, h("button", { type: "submit", class: "btn run" }, "Convert date")), result);
+}
+
 const passportUI = {};
 function passportOptions() {
   const number = (min, max, value) => h("input", { class: "field", type: "number", min, max, value, required: "" });
@@ -2188,7 +2281,10 @@ const TOOLS = [
   { id: "pdf-page-numbers", title: "PDF Page Numbers", group: "pdf",
     blurb: "Add page numbers where you want them and optionally skip the cover.",
     accept: PDF_ACCEPT, multiple: false, options: pageNumberOptions, action: "Add page numbers", process: addPageNumbers },
-
+  { id: "qr-code-generator", title: "QR Code Generator", group: "utility",
+    blurb: "Turn a link or text into a downloadable QR code.", render: qrCodeForm },
+  { id: "date-converter", title: "BS ↔ AD Date Converter", group: "utility",
+    blurb: "Convert dates between Bikram Sambat and the Gregorian calendar.", render: dateConverterForm },
   { id: "merge-pdf", title: "PDF Combiner", group: "pdf", size: "w4",
     blurb: "Combine several PDFs into one file, in the order you choose.",
     accept: ".pdf,application/pdf", multiple: true, action: "Merge files",
@@ -2269,6 +2365,8 @@ function buildHome() {
   const searchTerms = {
     "passport-photo-maker": "id visa crop print photo size millimeters headshot",
     "pdf-page-numbers": "number pages pagination footer header folio skip cover",
+    "qr-code-generator": "qr qrcode barcode link url",
+    "date-converter": "nepali date english date bs to ad ad to bs calendar bikram sambat",
     "merge-pdf": "combine join",
     "split-pdf": "extract separate pages",
     "compress-pdf": "reduce shrink smaller",
@@ -2294,7 +2392,7 @@ function buildHome() {
     return { tool, link, keywords: (tool.title + " " + tool.blurb + " " + searchTerms[tool.id]).toLowerCase() };
   });
   const grid = h("div", { class: "bento" }, cards.map(card => card.link));
-  const search = h("input", { type: "search", placeholder: "Try “merge PDF” or “resize”", "aria-label": "Search PDF and image tools", "aria-controls": "tool-directory" });
+  const search = h("input", { type: "search", placeholder: "Try “merge PDF” or “QR code”", "aria-label": "Search tools", "aria-controls": "tool-directory" });
   const status = h("p", { class: "match-count", role: "status" }, TOOLS.length + " tools");
   const empty = h("div", { class: "empty-search", hidden: "" },
     h("p", {}, "No tools match your search."),
@@ -2353,7 +2451,7 @@ function buildTool(t) {
     h("div", { class: "tool-head" },
       h("div", { class: "tool-top" }, h("div", { class: "tool-title" }, iconEl(t.id), h("h1", {}, t.title)), shareBtn(t.id)),
       h("p", {}, t.blurb)),
-    t.comingSoon ? null : createUploader(t));
+    t.comingSoon ? null : (t.render ? t.render() : createUploader(t)));
   return panel;
 }
 
@@ -2371,6 +2469,14 @@ const SEO = {
  "pdf-page-numbers": {
   title: "Add Page Numbers to a PDF | Fileroom",
   desc: "Number PDF pages at a chosen position, set a starting number, and optionally skip the cover."
+ },
+ "qr-code-generator": {
+  title: "Free QR Code Generator | Fileroom",
+  desc: "Generate a QR code from a link or text and download it as a PNG."
+ },
+ "date-converter": {
+  title: "BS to AD and AD to BS Date Converter | Fileroom",
+  desc: "Convert dates between Bikram Sambat and the Gregorian calendar in both directions."
  },
  "organize-pdf": {
   title: "Organize PDF – Reorder, Rotate or Delete Pages | Fileroom",
@@ -2667,6 +2773,8 @@ function setSeo(id) {
 const ICONS = {
   "passport-photo-maker": '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M5 16a4 4 0 0 1 8 0m2-6h3m-3 4h3"/>',
   "pdf-page-numbers": '<path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM13 2v7h7m-9 4-1 6m5-6-1 6m-5-4h8m-9 2h8"/>',
+  "qr-code-generator": '<path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h3v3h-3zM21 14v7h-4"/>',
+  "date-converter": '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4m10-4v4M3 10h18m-13 4h8m-8 3h5"/>',
   "organize-pdf": '<rect x="3" y="4" width="7" height="16" rx="1"/><rect x="14" y="4" width="7" height="7" rx="1"/><rect x="14" y="15" width="7" height="5" rx="1"/>',
   "crop-image": '<path d="M6 3v14a1 1 0 0 0 1 1h14M3 6h14a1 1 0 0 1 1 1v14"/>',
   "extract-text": '<path d="M4 8V4h4m8 0h4v4m0 8v4h-4m-8 0H4v-4M8 9h8m-8 3h8m-8 3h5"/>',
